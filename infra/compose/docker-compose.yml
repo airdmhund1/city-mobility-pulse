@@ -1,0 +1,124 @@
+services:
+  redpanda:
+    image: redpandadata/redpanda:v24.1.6
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --set redpanda.auto_create_topics_enabled=true
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092,OUTSIDE://0.0.0.0:9094
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092,OUTSIDE://localhost:9094
+    ports: [ "9094:9094" ]
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info", "-X", "brokers=redpanda:9092"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-07-26T20-48-21Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports: ["9000:9000","9001:9001"]
+    volumes: ["minio-data:/data"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://minio:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  create-bucket:
+    image: minio/mc:RELEASE.2024-07-26T15-33-07Z
+    depends_on: [minio]
+    entrypoint: ["/bin/sh","-c"]
+    command: >
+      "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
+      mc mb -p local/${S3_BUCKET} || true &&
+      mc ilm rule add --expire-days 30 local/${S3_BUCKET} || true
+      "
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports: ["5432:5432"]
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow.db --default-artifact-root ${S3_ENDPOINT}/${S3_BUCKET}/mlflow
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: ${S3_ENDPOINT}
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+    ports: ["5000:5000"]
+    volumes: ["mlflow-data:/mlruns"]
+
+  spark:
+    build:
+      context: .
+      dockerfile: pipelines/spark/Dockerfile
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI}
+    volumes:
+      - ./pipelines/spark:/opt/spark/workdir
+      - spark-checkpoints:/opt/spark/checkpoints
+    depends_on: [redpanda, minio, create-bucket]
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: app/api/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/mobility
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_BUCKET: ${S3_BUCKET}
+    ports: ["${API_PORT}:8080"]
+    depends_on: [postgres]
+
+  web:
+    build:
+      context: .
+      dockerfile: app/web/Dockerfile
+    ports: ["${WEB_PORT}:5173"]
+    environment:
+      VITE_API_URL: http://localhost:${API_PORT}
+    depends_on: [fastapi]
+
+  producer-bike:
+    build:
+      context: .
+      dockerfile: pipelines/producers/Dockerfile
+    environment:
+      REDPANDA_BROKERS: ${REDPANDA_BROKERS}
+      KAFKA_TOPIC_BIKE: ${KAFKA_TOPIC_BIKE}
+    depends_on: [redpanda]
+
+  producer-weather:
+    build:
+      context: .
+      dockerfile: pipelines/producers/Dockerfile
+    command: ["python","producer_weather.py"]
+    environment:
+      REDPANDA_BROKERS: ${REDPANDA_BROKERS}
+      KAFKA_TOPIC_WEATHER: ${KAFKA_TOPIC_WEATHER}
+    depends_on: [redpanda]
+
+volumes:
+  minio-data:
+  pg-data:
+  spark-checkpoints:
+  mlflow-data:
