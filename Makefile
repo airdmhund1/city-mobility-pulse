@@ -27,6 +27,13 @@ spark-stream:
 	  --packages io.delta:delta-spark_2.12:3.2.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 \
 	  --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension \
 	  --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog \
+	  --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+	  --conf spark.hadoop.fs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider \
+	  --conf spark.hadoop.fs.s3a.access.key=$${S3_ACCESS_KEY} \
+	  --conf spark.hadoop.fs.s3a.secret.key=$${S3_SECRET_KEY} \
+	  --conf spark.hadoop.fs.s3a.endpoint=$${S3_ENDPOINT} \
+	  --conf spark.hadoop.fs.s3a.path.style.access=true \
+	  --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
 	  /opt/spark/workdir/streaming/stream_to_delta.py
 
 start-spark: spark-stream
