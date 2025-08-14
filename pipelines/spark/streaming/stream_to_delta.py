@@ -13,7 +13,7 @@ def spark():
     Credentials/endpoint come from env vars with sensible MinIO defaults.
     """
     # Env-driven MinIO/S3A config (override these via env if needed)
-    MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")  # e.g., "http://localhost:9000" if running locally
+    MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")  # e.g., "http://localhost:9000" if running locally
     ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID", "minioadmin")
     SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
     SSL_ENABLED = "true" if MINIO_ENDPOINT.strip().lower().startswith("https") else "false"
