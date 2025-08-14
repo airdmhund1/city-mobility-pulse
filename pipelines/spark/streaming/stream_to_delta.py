@@ -4,7 +4,7 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 import os
 
 # from your conf.py
-from conf import BRONZE, SILVER, GOLD, KAFKA_BROKERS, TOPIC_BIKE, TOPIC_WEATHER, CHECKPOINTS, DELTA_OPTS
+from conf import BRONZE, SILVER, GOLD, REDPANDA_BROKERS, TOPIC_BIKE, TOPIC_WEATHER, CHECKPOINTS, DELTA_OPTS
 
 
 def spark():
@@ -63,14 +63,14 @@ def main():
     # ---- Bronze (raw JSON from Kafka) ----
     bike_raw = (
         sp.readStream.format("kafka")
-        .option("kafka.bootstrap.servers", KAFKA_BROKERS)
+        .option("kafka.bootstrap.servers", REDPANDA_BROKERS)
         .option("subscribe", TOPIC_BIKE)
         .option("startingOffsets", "latest")
         .load()
     )
     weather_raw = (
         sp.readStream.format("kafka")
-        .option("kafka.bootstrap.servers", KAFKA_BROKERS)
+        .option("kafka.bootstrap.servers", REDPANDA_BROKERS)
         .option("subscribe", TOPIC_WEATHER)
         .option("startingOffsets", "latest")
         .load()
