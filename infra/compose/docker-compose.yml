@@ -23,22 +23,27 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports: ["9000:9000","9001:9001"]
     volumes: ["minio-data:/data"]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://minio:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   create-bucket:
     image: quay.io/minio/mc:latest
     depends_on:
       - minio
-    entrypoint: ["/bin/sh","-c"]
-    command: >
-      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
-      (mc ls local/${S3_BUCKET} || mc mb -p local/${S3_BUCKET}) &&
-      mc ilm rule add --expire-days 30 local/${S3_BUCKET} || true
-      "
+    # IMPORTANT: clear mc's default ENTRYPOINT so we can run /bin/sh
+    entrypoint: [""]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        echo "Waiting for MinIO to accept credentials..."
+        until /usr/bin/mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" >/dev/null 2>&1; do
+          sleep 2
+        done
+        echo "MinIO reachable. Ensuring bucket ${S3_BUCKET}..."
+        /usr/bin/mc ls "local/${S3_BUCKET}" >/dev/null 2>&1 || /usr/bin/mc mb -p "local/${S3_BUCKET}"
+        /usr/bin/mc ilm rule add --expire-days 30 "local/${S3_BUCKET}" || true
+        echo "Bucket ready."
+      
 
   postgres:
     image: postgres:16
