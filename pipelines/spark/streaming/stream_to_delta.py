@@ -1,167 +1,181 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, to_timestamp, window, expr
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType
-import os
+from pyspark.sql.types import (
+    StructType, StructField, StringType, IntegerType, DoubleType
+)
+from pyspark.sql.functions import col, from_json, to_timestamp, expr, window
+from py4j.protocol import Py4JJavaError
 
-# from your conf.py
-from conf import BRONZE, SILVER, GOLD, REDPANDA_BROKERS, TOPIC_BIKE, TOPIC_WEATHER, CHECKPOINTS, DELTA_OPTS
+import conf as C
+
+# Schemas
+
+bike_schema = StructType([
+    StructField("city_id",    StringType(),  True),
+    StructField("station_id", StringType(),  True),
+    StructField("event_time", StringType(),  True),   # will parse -> timestamp
+    StructField("bike_count", IntegerType(), True),
+])
+
+weather_schema = StructType([
+    StructField("city_id",    StringType(),  True),
+    StructField("event_time", StringType(),  True),   # will parse -> timestamp
+    StructField("temp_c",     DoubleType(),  True),
+    StructField("precip_mm",  DoubleType(),  True),
+])
 
 
-def spark():
-    """
-    Build a SparkSession with Delta + S3A (MinIO) configured.
-    Credentials/endpoint come from env vars with sensible MinIO defaults.
-    """
-    # Env-driven MinIO/S3A config (override these via env if needed)
-    MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")  # e.g., "http://localhost:9000" if running locally
-    ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID", "minioadmin")
-    SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
-    SSL_ENABLED = "true" if MINIO_ENDPOINT.strip().lower().startswith("https") else "false"
+def build_spark():
+    b = SparkSession.builder.appName("mobility-stream")
 
-    builder = (
-        SparkSession.builder.appName("mobility-stream")
-        # Core Delta config (safe to set even if you also pass via DELTA_OPTS)
-        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-        # Delta log store for object storage
-        .config("spark.delta.logStore.class", "io.delta.storage.S3SingleDriverLogStore")
-        # S3A (MinIO) settings
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
-        .config("spark.hadoop.fs.s3a.path.style.access", "true")
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", SSL_ENABLED)
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
-        .config("spark.hadoop.fs.s3a.access.key", ACCESS_KEY)
-        .config("spark.hadoop.fs.s3a.secret.key", SECRET_KEY)
-        # Nice-to-haves for local/dev streaming
-        .config("spark.sql.shuffle.partitions", "1")
+    # Delta + S3A/MinIO opts from  conf.py
+    for k, v in C.DELTA_OPTS.items():
+        b = b.config(k, v)
+
+    
+    b = b.config(
+        "spark.jars.packages",
+        ",".join([
+            # Required for structured streaming ↔ Kafka
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1",
+            "org.apache.spark:spark-token-provider-kafka-0-10_2.12:3.5.1",
+        ])
     )
 
-    # Apply any extra options you already defined in conf.DELTA_OPTS
-    for k, v in DELTA_OPTS.items():
-        builder = builder.config(k, v)
+    b = b.config("spark.sql.adaptive.enabled", "false")
 
-    return builder.getOrCreate()
+    spark = b.getOrCreate()
 
+    try:
+        spark._jvm.java.lang.Class.forName("org.apache.spark.kafka010.KafkaConfigUpdater")
+    except Py4JJavaError:
+        raise RuntimeError(
+            "\n[Classpath error] Missing Spark Kafka integration jar.\n"
+            "Spark could not load org.apache.spark.kafka010.KafkaConfigUpdater.\n\n"
+            "You must add these jars to the driver & executors classpath BEFORE starting the app:\n"
+            "  - org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1\n"
+            "  - org.apache.spark:spark-token-provider-kafka-0-10_2.12:3.5.1\n"
+            "Plus transitive deps typically needed in the image:\n"
+            "  - org.apache.kafka:kafka-clients:3.5.x\n"
+            "  - org.apache.commons:commons-pool2:2.x\n\n"
+            "If your containers are offline, do NOT rely on spark.jars.packages.\n"
+            "Bake the jars into the image (e.g., /opt/bitnami/spark/jars) or mount them and set SPARK_CLASSPATH.\n"
+        )
 
+    return spark
+
+# ----------------------------
+# IO helpers
+# ----------------------------
+def read_kafka_json(spark, topic: str, schema: StructType):
+    kafka = (
+        spark.readStream
+             .format("kafka")
+             .option("kafka.bootstrap.servers", C.REDPANDA_BROKERS)
+             .option("subscribe", topic)
+             .option("startingOffsets", "latest")
+             .option("failOnDataLoss", "false")
+             .load()
+    )
+    parsed = (
+        kafka.selectExpr("CAST(value AS STRING) AS json_str")
+             .select(from_json(col("json_str"), schema).alias("data"))
+             .select("data.*")
+    )
+    return parsed
+
+def start_delta_sink(df, path: str, checkpoint: str, mode: str = "append"):
+    return (
+        df.writeStream
+          .format("delta")
+          .outputMode(mode)
+          .option("checkpointLocation", checkpoint)
+          .option("mergeSchema", "true")
+          .start(path)
+    )
+
+# ----------------------------
+# Main pipeline
+# ----------------------------
 def main():
-    sp = spark()
+    spark = build_spark()
 
-    # Schemas
-    bike_schema = StructType([
-        StructField("station_id", StringType()),
-        StructField("bikes_available", DoubleType()),
-        StructField("docks_available", DoubleType()),
-        StructField("event_time", StringType()),  # ISO8601 string
-    ])
-    weather_schema = StructType([
-        StructField("temp_c", DoubleType()),
-        StructField("precip_mm", DoubleType()),
-        StructField("event_time", StringType()),
-    ])
-
-    # ---- Bronze (raw JSON from Kafka) ----
+    # ---- Bronze ----
     bike_raw = (
-        sp.readStream.format("kafka")
-        .option("kafka.bootstrap.servers", REDPANDA_BROKERS)
-        .option("subscribe", TOPIC_BIKE)
-        .option("startingOffsets", "latest")
-        .load()
+        read_kafka_json(spark, C.TOPIC_BIKE, bike_schema)
+        .withColumn("event_time_b", to_timestamp(col("event_time")))
+        .drop("event_time")
+        .withWatermark("event_time_b", "15 minutes")
     )
+
     weather_raw = (
-        sp.readStream.format("kafka")
-        .option("kafka.bootstrap.servers", REDPANDA_BROKERS)
-        .option("subscribe", TOPIC_WEATHER)
-        .option("startingOffsets", "latest")
-        .load()
+        read_kafka_json(spark, C.TOPIC_WEATHER, weather_schema)
+        .withColumn("event_time_w", to_timestamp(col("event_time")))
+        .drop("event_time")
+        .withWatermark("event_time_w", "15 minutes")
     )
 
-    bike_bronze = bike_raw.selectExpr("CAST(value AS STRING) AS json", "timestamp AS kafka_time")
-    weather_bronze = weather_raw.selectExpr("CAST(value AS STRING) AS json", "timestamp AS kafka_time")
-
-    q_bike_bronze = (
-        bike_bronze.writeStream.format("delta")
-        .option("checkpointLocation", f"{CHECKPOINTS}/bronze_bike")
-        .outputMode("append")
-        .start(f"{BRONZE}/bike")
+    q_bronze_bike = start_delta_sink(
+        bike_raw, f"{C.BRONZE}/bike", f"{C.CHECKPOINTS}/bronze_bike", "append"
     )
-    q_weather_bronze = (
-        weather_bronze.writeStream.format("delta")
-        .option("checkpointLocation", f"{CHECKPOINTS}/bronze_weather")
-        .outputMode("append")
-        .start(f"{BRONZE}/weather")
+    q_bronze_weather = start_delta_sink(
+        weather_raw, f"{C.BRONZE}/weather", f"{C.CHECKPOINTS}/bronze_weather", "append"
     )
 
-    # ---- Silver (parsed, deduped, watermark) ----
-    bike_silver = (
-        bike_bronze
-        .select(from_json(col("json"), bike_schema).alias("d"))
-        .select("d.*")
-        .withColumn("event_time", to_timestamp("event_time"))
-        .withWatermark("event_time", "15 minutes")
-        .dropDuplicates(["station_id", "event_time"])
-        .alias("b")
-    )
-    weather_silver = (
-        weather_bronze
-        .select(from_json(col("json"), weather_schema).alias("d"))
-        .select("d.*")
-        .withColumn("event_time", to_timestamp("event_time"))
-        .withWatermark("event_time", "15 minutes")
-        .dropDuplicates(["event_time"])
-        .alias("w")
+    # ---- Silver (join + 5-min window agg) ----
+    joined = (
+        bike_raw.alias("b")
+        .join(
+            weather_raw.alias("w"),
+            expr("""
+                 b.city_id = w.city_id
+             AND b.event_time_b BETWEEN w.event_time_w - INTERVAL 15 MINUTES
+                                     AND w.event_time_w + INTERVAL 15 MINUTES
+            """),
+            "leftOuter"
+        )
     )
 
-    q_bike_silver = (
-        bike_silver.writeStream.format("delta")
-        .option("checkpointLocation", f"{CHECKPOINTS}/silver_bike")
-        .outputMode("append")
-        .start(f"{SILVER}/bike")
-    )
-    q_weather_silver = (
-        weather_silver.writeStream.format("delta")
-        .option("checkpointLocation", f"{CHECKPOINTS}/silver_weather")
-        .outputMode("append")
-        .start(f"{SILVER}/weather")
-    )
-
-    # ---- Gold (joined aggregates) ----
-    # Stream-stream left join with time bounds (requires watermarks on both sides, already set above)
-    joined = bike_silver.join(
-        weather_silver,
-        expr("""
-            w.event_time >= b.event_time - interval 10 minutes AND
-            w.event_time <= b.event_time + interval 10 minutes
-        """),
-        how="leftOuter",
-    )
-
-    gold = (
-        joined
-        .groupBy("station_id", window(col("event_time"), "5 minutes"))
+    silver_agg = (
+        joined.groupBy(
+            window(col("b.event_time_b"), "5 minutes").alias("w5"),
+            col("b.city_id").alias("city_id"),
+        )
         .agg(
-            expr("avg(bikes_available) as avg_bikes"),
-            expr("avg(docks_available) as avg_docks"),
-            expr("avg(temp_c) as avg_temp_c"),
-            expr("avg(coalesce(precip_mm, 0)) as avg_precip_mm"),
+            expr("sum(b.bike_count)  as total_bike_count"),
+            expr("avg(w.temp_c)      as avg_temp_c"),
+            expr("avg(w.precip_mm)   as avg_precip_mm"),
         )
         .select(
-            col("station_id"),
-            col("window.start").alias("window_start"),
-            col("window.end").alias("window_end"),
-            "avg_bikes", "avg_docks", "avg_temp_c", "avg_precip_mm",
+            col("city_id"),
+            col("w5.start").alias("window_start"),
+            col("w5.end").alias("window_end"),
+            col("total_bike_count"),
+            col("avg_temp_c"),
+            col("avg_precip_mm"),
         )
     )
 
-    q_gold = (
-        gold.writeStream.format("delta")
-        .option("checkpointLocation", f"{CHECKPOINTS}/gold_station")
-        .outputMode("complete")
-        .start(f"{GOLD}/station_availability")
+    q_silver = start_delta_sink(
+        silver_agg,
+        f"{C.SILVER}/mobility_weather_5min",
+        f"{C.CHECKPOINTS}/silver_mobility_weather_5min",
+        "append",
     )
 
-    sp.streams.awaitAnyTermination()
+    # ---- Gold (curated projection) ----
+    gold = silver_agg.select(
+        "city_id", "window_start", "window_end",
+        "total_bike_count", "avg_temp_c", "avg_precip_mm"
+    )
 
+    q_gold = start_delta_sink(
+        gold,
+        f"{C.GOLD}/mobility_weather_5min",
+        f"{C.CHECKPOINTS}/gold_mobility_weather_5min",
+        "append",
+    )
+
+    spark.streams.awaitAnyTermination()
 
 if __name__ == "__main__":
     main()

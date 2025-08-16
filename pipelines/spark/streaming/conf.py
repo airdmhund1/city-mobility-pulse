@@ -18,15 +18,13 @@ SILVER = f"s3a://{S3_BUCKET}/silver"
 GOLD   = f"s3a://{S3_BUCKET}/gold"
 CHECKPOINTS = f"s3a://{S3_BUCKET}/checkpoints"
 
-# Strip scheme for Hadoop endpoint and set SSL flag based on scheme
-# _endpoint_no_scheme = S3_ENDPOINT.replace("http://", "").replace("https://", "")
-# _ssl_enabled = "false" if S3_ENDPOINT.startswith("http://") else "true"
 
 DELTA_OPTS = {
     # Delta
     "spark.sql.extensions": "io.delta.sql.DeltaSparkSessionExtension",
     "spark.sql.catalog.spark_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog",
     "spark.delta.logStore.class": "io.delta.storage.S3SingleDriverLogStore",
+
 
     # S3A + MinIO
     "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
@@ -37,6 +35,5 @@ DELTA_OPTS = {
     "spark.hadoop.fs.s3a.access.key": AWS_ACCESS_KEY_ID or "",
     "spark.hadoop.fs.s3a.secret.key": AWS_SECRET_ACCESS_KEY or "",
 
-    # Optional: but helpful
     "spark.hadoop.fs.s3a.fast.upload": "true",
 }
