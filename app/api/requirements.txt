@@ -4,3 +4,9 @@ pydantic==2.8.2
 sqlalchemy==2.0.31
 psycopg[binary]==3.2.1
 pandas==2.2.2
+duckdb==1.0.0
+pandas==2.2.2
+deltalake==0.9.0
+pyarrow==12.0.0
+pandas==2.2.2
+numpy==1.26.4

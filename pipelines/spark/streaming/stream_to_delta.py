@@ -175,6 +175,31 @@ def main():
         "append",
     )
 
+    # ---- Gold (station availability, 5-minute averages) ----
+    # Per-station average bikes in 5-minute windows, grouped by city and station.
+    station_5min = (
+        bike_raw.groupBy(
+            window(col("event_time_b"), "5 minutes").alias("w5"),
+            col("city_id"),
+            col("station_id"),
+        )
+        .agg(expr("avg(bike_count) as avg_bikes"))
+        .select(
+            col("city_id"),
+            col("station_id"),
+            col("w5.start").alias("window_start"),
+            col("w5.end").alias("window_end"),
+            col("avg_bikes"),
+        )
+    )
+
+    q_gold_station = start_delta_sink(
+        station_5min,
+        f"{C.GOLD}/station_availability_5min",
+        f"{C.CHECKPOINTS}/gold_station_availability_5min",
+        "append",
+    )
+
     spark.streams.awaitAnyTermination()
 
 if __name__ == "__main__":

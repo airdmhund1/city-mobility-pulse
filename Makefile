@@ -6,10 +6,14 @@ up:
 	cd infra/compose && docker compose --env-file .env up -d --build
 
 down:
-	cd infra/compose && docker compose --env-file .env down -v
+	cd infra/compose && docker compose --env-file .env down 
 
 logs:
 	cd infra/compose && docker compose --env-file .env logs -f
+
+# api_rebuild:
+# 	cd app/api && docker compose --env-file .env build --no-cache fastapi
+#   cd app/api && docker compose --env-file .env up -d fastapi 
 
 rebuild:
 	cd infra/compose && docker compose --env-file .env build --no-cache
