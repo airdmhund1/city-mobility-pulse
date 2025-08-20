@@ -55,3 +55,15 @@ spark-stream:
 	  2>&1 | tee ../../$$LOG_FILE
 
 start-spark: spark-stream
+
+# --- UI (Docker) ---
+ui-up:
+	cd infra/compose && docker compose --env-file .env up -d ui
+
+ui-logs:
+	cd infra/compose && docker compose --env-file .env logs -f ui
+
+ui-down:
+	cd infra/compose && docker compose --env-file .env stop ui
+
+ui-restart: ui-down ui-up
