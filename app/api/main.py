@@ -1,5 +1,6 @@
 import os
 from typing import List, Dict, Any, Optional
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,10 @@ GOLD_BIKE_HOURLY = f"s3://{BUCKET}/gold/bike_usage_hourly"
 GOLD_BIKE_DAILY  = f"s3://{BUCKET}/gold/bike_usage_daily"
 GOLD_WX_HOURLY   = f"s3://{BUCKET}/gold/weather_hourly"
 GOLD_WX_DAILY    = f"s3://{BUCKET}/gold/weather_daily"
+SILVER_BIKE_PATH = f"s3://{BUCKET}/silver/bike_events"
+SILVER_WX_PATH   = f"s3://{BUCKET}/silver/weather_events"
+
+
 
 STORAGE_OPTS = {
     # MinIO via AWS-compatible keys
@@ -166,6 +171,55 @@ def _read_delta_as_df(table_path: str) -> "pd.DataFrame":
     }
     dt = DeltaTable(f"s3://lakehouse/{table_path}", storage_options=storage_options)
     return dt.to_pandas()
+
+def _read_delta_to_pandas(uri: str) -> pd.DataFrame:
+    """Open a Delta table and read it to pandas (small-ish samples).
+    We keep this simple to be compatible with deltalake 0.9.x.
+    """
+    try:
+        from deltalake import DeltaTable  # lazy import
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Missing dependency: 'deltalake'. Add it to app/api/requirements.txt and rebuild the api image.",
+        )
+
+    try:
+        dt = DeltaTable(uri, storage_options=STORAGE_OPTS)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Could not open Delta table {uri}: {e}")
+
+    try:
+        df = dt.to_pandas()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed reading {uri}: {e}")
+
+    return df
+
+
+def _filter_time(df: pd.DataFrame, minutes: Optional[int], time_col: str = "event_time") -> pd.DataFrame:
+    if minutes is None:
+        return df
+    if time_col not in df.columns:
+        return df
+    # parse to datetime (UTC) and filter
+    ts = pd.to_datetime(df[time_col], utc=True, errors="coerce")
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    return df.loc[ts >= cutoff]
+
+
+def _limit(df: pd.DataFrame, n: int) -> List[Dict[str, Any]]:
+    n = max(1, min(n, 5000))  # simple safety cap
+    # prefer newest first if we have a time col
+    if "event_time" in df.columns:
+        try:
+            df = df.sort_values("event_time", ascending=False)
+        except Exception:
+            pass
+    return df.head(n).to_dict(orient="records")
+
+
+
 
 # ------------------------
 # FastAPI app
@@ -366,7 +420,7 @@ def gold_overview():
             out[name] = {"error": str(e)}
     return out
 
-from fastapi import Query
+
 
 @app.get("/stations/minute")
 def station_minute(
@@ -394,3 +448,53 @@ def station_minute(
           .to_dict(orient="records")
     )
     return out
+
+@app.get("/silver/bike")
+def silver_bike(
+    station_id: Optional[str] = Query(None, description="Filter by station_id, e.g. S011"),
+    city: Optional[str] = Query(None, alias="bike_city", description="Filter by bike_city"),
+    minutes: Optional[int] = Query(10, description="Only events in the last N minutes"),
+    limit: int = Query(100, ge=1, le=5000),
+):
+    """Return recent rows from silver/bike_events."""
+    df = _read_delta_to_pandas(SILVER_BIKE_PATH)
+
+    # basic column normalize (in case types drift)
+    for c in ("station_id", "bike_city"):
+        if c in df.columns:
+            df[c] = df[c].astype("string")
+
+    if station_id and "station_id" in df.columns:
+        df = df[df["station_id"] == station_id]
+
+    if city and "bike_city" in df.columns:
+        df = df[df["bike_city"] == city]
+
+    df = _filter_time(df, minutes, time_col="event_time")
+
+    return _limit(df, limit)
+
+
+# ---------- Silver: Weather ----------
+@app.get("/silver/weather")
+def silver_weather(
+    station_id: Optional[str] = Query(None, description="Filter by station_id"),
+    city: Optional[str] = Query(None, alias="weather_city", description="Filter by weather_city"),
+    minutes: Optional[int] = Query(10, description="Only events in the last N minutes"),
+    limit: int = Query(100, ge=1, le=5000),
+):
+    """Return recent rows from silver/weather_events."""
+    df = _read_delta_to_pandas(SILVER_WX_PATH)
+
+    for c in ("station_id", "weather_city"):
+        if c in df.columns:
+            df[c] = df[c].astype("string")
+
+    if station_id and "station_id" in df.columns:
+        df = df[df["station_id"] == station_id]
+
+    if city and "weather_city" in df.columns:
+        df = df[df["weather_city"] == city]
+
+    df = _filter_time(df, minutes, time_col="event_time")
+    return _limit(df, limit)
