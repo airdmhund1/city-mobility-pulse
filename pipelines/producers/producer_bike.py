@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from confluent_kafka import Producer
 
 # --- env / config ---
-BROKER = os.getenv("KAFKA_BROKER", "redpanda:29092")
+BROKER = os.getenv("KAFKA_BROKER", "redpanda:9092")
 TOPIC = os.getenv("BIKE_TOPIC", "bike")
 INTERVAL_SEC = float(os.getenv("BIKE_INTERVAL_SEC", "1.0"))
 
