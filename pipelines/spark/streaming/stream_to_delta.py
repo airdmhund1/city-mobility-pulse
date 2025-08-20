@@ -3,7 +3,8 @@ import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, from_json, to_timestamp, window, to_date,
-    sum as _sum, avg as _avg, max as _max, expr
+    sum as _sum, avg as _avg, max as _max, expr,
+    round as _round
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, DoubleType
@@ -27,6 +28,7 @@ GOLD_BIKE_HOURLY  = f"{S3_BASE}/gold/bike_usage_hourly"
 GOLD_BIKE_DAILY   = f"{S3_BASE}/gold/bike_usage_daily"
 GOLD_WEATHER_HR   = f"{S3_BASE}/gold/weather_hourly"
 GOLD_WEATHER_DY   = f"{S3_BASE}/gold/weather_daily"
+GOLD_BIKE_MINUTE  = f"{S3_BASE}/gold/bike_minute"
 
 # Checkpoints
 CKPT_BASE            = f"{S3_BASE}/_checkpoints"
@@ -38,6 +40,7 @@ CKPT_GOLD_BIKE_H     = f"{CKPT_BASE}/gold_bike_hourly"
 CKPT_GOLD_BIKE_D     = f"{CKPT_BASE}/gold_bike_daily"
 CKPT_GOLD_WX_H       = f"{CKPT_BASE}/gold_weather_hourly"
 CKPT_GOLD_WX_D       = f"{CKPT_BASE}/gold_weather_daily"
+CKPT_GOLD_BIKE_M     = f"{CKPT_BASE}/gold_bike_minute"
 
 # ----------- Schemas (match producers exactly) -----------
 bike_schema = StructType([
@@ -333,6 +336,46 @@ def main():
             .start(GOLD_WEATHER_DY)
     )     
     # Run forever
+
+    # ---------- 5) GOLD: BIKE minute-level snapshot (dev-friendly, near real-time) ----------
+    # Tumbling window = 1 minute, watermark = 2 minutes.
+    # We use AVG over the minute (rounded) + MAX(docks_total) as it is fixed per station.
+
+
+    bike_minute = (
+        df_bike_silver
+        .groupBy(
+            window(col("event_time"), "1 minute").alias("w"),
+            col("station_id"),
+            col("bike_city"),
+        )
+        .agg(
+            _avg("bikes_available").alias("bikes_available_avg"),
+            _avg("bikes_occupied").alias("bikes_occupied_avg"),
+            _max("docks_total").alias("docks_total"),
+        )
+        .select(
+            col("station_id"),
+            col("bike_city"),
+            col("w.start").alias("window_start"),
+            col("w.end").alias("window_end"),
+            _round(col("bikes_available_avg")).cast("int").alias("bikes_available"),
+            _round(col("bikes_occupied_avg")).cast("int").alias("bikes_occupied"),
+            col("docks_total"),
+            expr("to_date(window_start)").alias("dt"),
+        )
+    )
+
+    q_gold_bike_m = (
+        bike_minute.writeStream
+        .format("delta")
+        .option("checkpointLocation", CKPT_GOLD_BIKE_M)
+        .outputMode("append")
+        .trigger(processingTime="30 seconds")
+        .partitionBy("dt")
+        .start(GOLD_BIKE_MINUTE)
+    )
+
     spark.streams.awaitAnyTermination()
 
 if __name__ == "__main__":
