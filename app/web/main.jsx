@@ -8,7 +8,7 @@ function App(){
   const [rows,setRows] = React.useState([])
   React.useEffect(()=>{
     axios.get(`${API}/stations/summary`)
-      .then(r=>setRows(r.data))
+      .then(r => { console.log("API /stations/summary raw:", r.data); setRows(r.data); })
       .catch(err => {
         console.error("UI fetch error:", err?.response?.status, err?.message);
       });
@@ -18,7 +18,11 @@ function App(){
       <h2>City Mobility Pulse</h2>
       <p>Demo aggregates (replace with live Gold tables shortly)</p>
       <ul>
-        {rows.map((r,i)=>(<li key={i}>{r.station_id}: bikes {Number(r.avg_bikes).toFixed(1)} / docks {Number(r.avg_docks).toFixed(1)}</li>))}
+        {rows.map((r,i)=>(
+          <li key={i}>
+            <code>{JSON.stringify(r)}</code>
+          </li>
+        ))}
       </ul>
     </div>
   )
