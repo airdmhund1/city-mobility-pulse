@@ -122,6 +122,19 @@ services:
       KAFKA_TOPIC_WEATHER: ${KAFKA_TOPIC_WEATHER}
     depends_on: [redpanda]
 
+  ui:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ../../app/ui:/app
+    command: sh -lc "npm install && npm run dev -- --host 0.0.0.0 --port 5174"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    ports:
+      - "5174:5174"
+    depends_on:
+      - fastapi
+
 volumes:
   minio-data:
   pg-data:
