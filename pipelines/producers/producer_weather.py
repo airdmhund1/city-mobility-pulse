@@ -12,22 +12,44 @@ BROKER = os.getenv("REDPANDA_BROKERS", "redpanda:9092")
 TOPIC = os.getenv("KAFKA_TOPIC_WEATHER", "weather")
 INTERVAL_SEC = float(os.getenv("WEATHER_INTERVAL_SEC", "1.0"))
 
+
 def now_iso_z() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 # -------- station set (MATCHES BIKE) --------
 # If your bike mapping differs, just edit this list to the same mapping.
 STATIONS = [
-    ("S001", "Boston"), ("S002", "Cambridge"), ("S003", "Somerville"),
-    ("S004", "Worcester"), ("S005", "Springfield"), ("S006", "Lowell"),
-    ("S007", "Quincy"), ("S008", "Newton"), ("S009", "Brockton"),
-    ("S010", "Lynn"), ("S011", "Fall River"), ("S012", "New Bedford"),
-    ("S013", "Framingham"), ("S014", "Waltham"), ("S015", "Haverhill"),
-    ("S016", "Malden"), ("S017", "Medford"), ("S018", "Taunton"),
-    ("S019", "Chicopee"), ("S020", "Everett"), ("S021", "Revere"),
-    ("S022", "Peabody"), ("S023", "Arlington"), ("S024", "Attleboro"),
-    ("S025", "Methuen"), ("S026", "Barnstable"), ("S027", "Pittsfield"),
-    ("S028", "Leominster"), ("S029", "Westfield"), ("S030", "Salem"),
+    ("S001", "Boston"),
+    ("S002", "Cambridge"),
+    ("S003", "Somerville"),
+    ("S004", "Worcester"),
+    ("S005", "Springfield"),
+    ("S006", "Lowell"),
+    ("S007", "Quincy"),
+    ("S008", "Newton"),
+    ("S009", "Brockton"),
+    ("S010", "Lynn"),
+    ("S011", "Fall River"),
+    ("S012", "New Bedford"),
+    ("S013", "Framingham"),
+    ("S014", "Waltham"),
+    ("S015", "Haverhill"),
+    ("S016", "Malden"),
+    ("S017", "Medford"),
+    ("S018", "Taunton"),
+    ("S019", "Chicopee"),
+    ("S020", "Everett"),
+    ("S021", "Revere"),
+    ("S022", "Peabody"),
+    ("S023", "Arlington"),
+    ("S024", "Attleboro"),
+    ("S025", "Methuen"),
+    ("S026", "Barnstable"),
+    ("S027", "Pittsfield"),
+    ("S028", "Leominster"),
+    ("S029", "Westfield"),
+    ("S030", "Salem"),
 ]
 
 # -------- per-station weather baselines (temp_c, wind_kph, humidity%, pressure_mb) --------
@@ -36,7 +58,7 @@ BASELINES = {
     "S002": (17.5, 12.0, 68, 1015),
     "S003": (17.5, 12.0, 66, 1015),
     "S004": (16.0, 10.0, 72, 1013),
-    "S005": (17.0,  9.0, 67, 1014),
+    "S005": (17.0, 9.0, 67, 1014),
     "S006": (17.0, 10.0, 66, 1014),
     "S007": (17.5, 13.0, 71, 1015),
     "S008": (17.2, 11.0, 67, 1015),
@@ -50,7 +72,7 @@ BASELINES = {
     "S016": (17.2, 12.0, 69, 1015),
     "S017": (17.1, 11.0, 68, 1015),
     "S018": (16.9, 11.0, 70, 1015),
-    "S019": (16.5,  9.0, 67, 1014),
+    "S019": (16.5, 9.0, 67, 1014),
     "S020": (17.2, 12.0, 70, 1015),
     "S021": (17.8, 15.0, 74, 1015),
     "S022": (17.0, 12.0, 69, 1015),
@@ -58,13 +80,16 @@ BASELINES = {
     "S024": (16.8, 11.0, 69, 1015),
     "S025": (16.5, 10.0, 66, 1014),
     "S026": (17.0, 17.0, 76, 1016),
-    "S027": (15.0,  9.0, 72, 1012),
-    "S028": (16.2,  9.0, 68, 1013),
-    "S029": (16.4,  9.0, 67, 1014),
+    "S027": (15.0, 9.0, 72, 1012),
+    "S028": (16.2, 9.0, 68, 1013),
+    "S029": (16.4, 9.0, 67, 1014),
     "S030": (17.6, 13.0, 72, 1015),
 }
 
-def classify_condition(temp_c: float, precip_mm: float, wind_kph: float, humidity: int) -> str:
+
+def classify_condition(
+    temp_c: float, precip_mm: float, wind_kph: float, humidity: int
+) -> str:
     if precip_mm >= 2.0:
         return "Rain"
     if precip_mm > 0.0:
@@ -75,10 +100,14 @@ def classify_condition(temp_c: float, precip_mm: float, wind_kph: float, humidit
         return "Cloudy"
     return "Clear"
 
+
 _running = True
+
+
 def _handle_stop(*_):
     global _running
     _running = False
+
 
 def _delivery(err, msg):
     if err:
@@ -87,16 +116,19 @@ def _delivery(err, msg):
         # comment this if you want quieter logs
         print(f"delivered {msg.topic()}[{msg.partition()}]@{msg.offset()}")
 
+
 def main():
     signal.signal(signal.SIGINT, _handle_stop)
     signal.signal(signal.SIGTERM, _handle_stop)
 
-    p = Producer({
-        "bootstrap.servers": BROKER,
-        "linger.ms": 5,
-        "batch.num.messages": 1000,
-        "queue.buffering.max.messages": 100000,
-    })
+    p = Producer(
+        {
+            "bootstrap.servers": BROKER,
+            "linger.ms": 5,
+            "batch.num.messages": 1000,
+            "queue.buffering.max.messages": 100000,
+        }
+    )
 
     rng = random.Random()
 
@@ -141,6 +173,7 @@ def main():
 
     print("flushing…")
     p.flush(10)
+
 
 if __name__ == "__main__":
     main()
