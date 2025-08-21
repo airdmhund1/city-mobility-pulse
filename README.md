@@ -35,6 +35,37 @@ flowchart LR
 - **Spark** reads from Kafka, processes events, and writes into Delta Lake tables.  
 - **Delta Lake** stores results in **Bronze, Silver, and Gold layers**.  
 
+## Bronze, Silver, and Gold Tables (Medallion Architecture)
+
+This project follows the **Medallion Architecture** pattern in Delta Lake, which organizes data into three layers — **Bronze**, **Silver**, and **Gold** — to mimic real-world data engineering practices.
+
+### 🥉 Bronze Layer (Raw Data)
+- **Purpose**: Stores raw, unprocessed data exactly as it arrives from the source (in this case, Kafka topics for bikes and weather).
+- **Details**: Includes Kafka metadata (topic, partition, offset, timestamp) alongside the event payload.
+- **Benefit**: Acts as a secure *landing zone*. Nothing is lost, and data lineage remains traceable to its original source.
+
+### 🥈 Silver Layer (Cleaned & Enriched Data)
+- **Purpose**: Transforms Bronze data into a cleaner, structured format by parsing JSON, casting types, and ensuring correct timestamps.
+- **Details**: Invalid or malformed records are filtered out, and useful helper columns (e.g., availability/utilization rates for bikes) are derived.
+- **Benefit**: Provides a reliable foundation for analytics and ensures that downstream consumers don’t have to re-clean raw data.
+
+### 🥇 Gold Layer (Aggregated & Business-Ready Data)
+- **Purpose**: Aggregates Silver data into meaningful insights (e.g., bike usage hourly/daily trends, weather summaries).
+- **Details**: 
+  - **Bike Gold**: hourly, daily, and minute-level usage statistics.  
+  - **Weather Gold**: hourly and daily climate summaries.  
+- **Benefit**: Optimized for consumption by BI dashboards, data scientists, or machine learning pipelines. This is the layer stakeholders interact with most directly.
+
+### 🔄 Real-World Mimicry
+This layering mirrors how real companies manage data:
+- **Bronze** = “data lake dump” (raw logs, events, or API dumps).  
+- **Silver** = cleaned and standardized data, consistent across the organization.  
+- **Gold** = curated datasets used by analysts and decision-makers.  
+
+By following this design, the pipeline ensures:
+- Data quality improves step by step.  
+- Each layer is reproducible and fault-tolerant.  
+- Teams can collaborate: data engineers focus on Bronze/Silver, analysts and BI teams consume Gold.  
 ---
 
 ## ⚙️ Tech Stack
