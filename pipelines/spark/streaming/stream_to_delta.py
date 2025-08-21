@@ -1,27 +1,34 @@
-# /opt/spark/workdir/streaming/stream_to_delta.py
+"""
+Streaming ETL for City Mobility Pulse.
+
+Consumes Kafka topics (bike, weather), lands raw events to Delta "bronze",
+parses/cleans into "silver", and writes minute/hour/day aggregates into "gold".
+Runs continuously until terminated.
+"""
+
 import os
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import (
-    col,
-    from_json,
-    to_timestamp,
-    window,
-    to_date,
-    sum as _sum,
-    avg as _avg,
-    max as _max,
-    expr,
-    round as _round,
-)
-from pyspark.sql.types import (
-    StructType,
-    StructField,
-    StringType,
-    IntegerType,
-    DoubleType,
-)
 
 import conf as C  # do not touch your delta opts
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import avg as _avg
+from pyspark.sql.functions import (
+    col,
+    expr,
+    from_json,
+    to_date,
+    to_timestamp,
+    window,
+)
+from pyspark.sql.functions import max as _max
+from pyspark.sql.functions import round as _round
+from pyspark.sql.functions import sum as _sum
+from pyspark.sql.types import (
+    DoubleType,
+    IntegerType,
+    StringType,
+    StructField,
+    StructType,
+)
 
 # ----------- Config (env) -----------
 BROKER = os.getenv("REDPANDA_BROKERS", "redpanda:9092")
@@ -83,6 +90,12 @@ weather_schema = StructType(
 
 # ----------- Spark session -----------
 def build_spark():
+    """
+    Build a SparkSession with Delta + Kafka configs applied.
+
+    Returns:
+        SparkSession: ready-to-use session for streaming ETL.
+    """
     b = SparkSession.builder.appName("CityMobilityPulse-ETL")
     for k, v in C.DELTA_OPTS.items():
         b = b.config(k, v)
@@ -101,6 +114,16 @@ def build_spark():
 
 # ----------- IO helpers -----------
 def read_kafka_stream(spark, topic: str):
+    """
+    Create a structured streaming DataFrame from a Kafka topic.
+
+    Args:
+        spark: active SparkSession.
+        topic: Kafka topic name.
+
+    Returns:
+        Streaming DataFrame with Kafka records.
+    """
     return (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", BROKER)
@@ -111,14 +134,21 @@ def read_kafka_stream(spark, topic: str):
     )
 
 
-def write_delta(
-    df, path: str, checkpoint: str, mode: str = "append", partition_cols=None
-):
-    w = (
-        df.writeStream.format("delta")
-        .option("checkpointLocation", checkpoint)
-        .outputMode(mode)
-    )
+def write_delta(df, path: str, checkpoint: str, mode: str = "append", partition_cols=None):
+    """
+    Write a streaming DataFrame to a Delta table.
+
+    Args:
+        df: streaming DataFrame to write.
+        path: destination Delta path (e.g., s3a://bucket/...).
+        checkpoint: checkpoint directory for exactly-once semantics.
+        mode: output mode for the stream (default: "append").
+        partition_cols: optional list of partition columns.
+
+    Returns:
+        Active StreamingQuery.
+    """
+    w = df.writeStream.format("delta").option("checkpointLocation", checkpoint).outputMode(mode)
     if partition_cols:
         w = w.partitionBy(*partition_cols)
     return w.start(path)
@@ -126,6 +156,13 @@ def write_delta(
 
 # ----------- Main -----------
 def main():
+    """
+    Orchestrate the full pipeline:
+      - BRONZE: dump raw Kafka payloads + metadata
+      - SILVER: parse/clean JSON, add timestamps and helper rates
+      - GOLD: write minute, hourly, and daily aggregates
+      - Block until terminated
+    """
     spark = build_spark()
 
     # -------- BRONZE (raw JSON + Kafka metadata) --------
@@ -143,9 +180,7 @@ def main():
         )
         .withColumn("dt", to_date(col("ingest_time")))
     )
-    q_bronze_bike = write_delta(
-        df_bike_raw, BRONZE_BIKE, CKPT_BRONZE_BIKE, partition_cols=["dt"]
-    )
+    write_delta(df_bike_raw, BRONZE_BIKE, CKPT_BRONZE_BIKE, partition_cols=["dt"])
 
     df_weather_raw = (
         read_kafka_stream(spark, TOPIC_WEATHER)
@@ -162,9 +197,7 @@ def main():
         .withColumn("dt", to_date(col("ingest_time")))
     )
 
-    q_bronze_weather = write_delta(
-        df_weather_raw, BRONZE_WEATHER, CKPT_BRONZE_WEATHER, partition_cols=["dt"]
-    )
+    write_delta(df_weather_raw, BRONZE_WEATHER, CKPT_BRONZE_WEATHER, partition_cols=["dt"])
 
     # ---------- 2) SILVER: parse & clean ----------
 
@@ -180,24 +213,32 @@ def main():
         .withColumn(
             "availability_rate",
             expr(
-                "CASE WHEN docks_total IS NOT NULL AND docks_total > 0 THEN bikes_available / docks_total ELSE NULL END"
+                """
+                CASE 
+                    WHEN docks_total IS NOT NULL AND docks_total > 0 
+                    THEN bikes_available / docks_total 
+                    ELSE NULL 
+                END
+                """
             ),
         )
         .withColumn(
             "utilization_rate",
             expr(
-                "CASE WHEN docks_total IS NOT NULL AND docks_total > 0 THEN bikes_occupied / docks_total ELSE NULL END"
+                """
+                CASE 
+                    WHEN docks_total IS NOT NULL AND docks_total > 0 
+                    THEN bikes_occupied / docks_total 
+                    ELSE NULL 
+                    END
+                """
             ),
         )
     )
 
-    q_silver_bike = (
-        df_bike_silver.writeStream.format("delta")
-        .option("checkpointLocation", CKPT_SILVER_BIKE)
-        .partitionBy("dt", "station_id")
-        .outputMode("append")
-        .start(SILVER_BIKE)
-    )
+    df_bike_silver.writeStream.format("delta").option(
+        "checkpointLocation", CKPT_SILVER_BIKE
+    ).partitionBy("dt", "station_id").outputMode("append").start(SILVER_BIKE)
 
     # Weather silver: parse JSON and cast
     df_weather_silver = (
@@ -209,13 +250,9 @@ def main():
         .withWatermark("event_time", "15 minutes")
     )
 
-    q_silver_weather = (
-        df_weather_silver.writeStream.format("delta")
-        .option("checkpointLocation", CKPT_SILVER_WEATHER)
-        .partitionBy("dt", "station_id")
-        .outputMode("append")
-        .start(SILVER_WEATHER)
-    )
+    df_weather_silver.writeStream.format("delta").option(
+        "checkpointLocation", CKPT_SILVER_WEATHER
+    ).partitionBy("dt", "station_id").outputMode("append").start(SILVER_WEATHER)
 
     # ---------- 3) GOLD: BIKE aggregations ----------
 
@@ -231,9 +268,7 @@ def main():
             _avg("bikes_available").alias("bikes_available_avg_hour"),
             _avg("availability_rate").alias("availability_rate_avg_hour"),
             _avg("utilization_rate").alias("utilization_rate_avg_hour"),
-            _max("docks_total").alias(
-                "docks_total"
-            ),  # stable per station, but safe to max()
+            _max("docks_total").alias("docks_total"),  # stable per station, but safe to max()
         )
         .select(
             col("station_id"),
@@ -249,13 +284,9 @@ def main():
         )
     )
 
-    q_gold_bike_h = (
-        bike_hourly.writeStream.format("delta")
-        .option("checkpointLocation", CKPT_GOLD_BIKE_H)
-        .partitionBy("dt", "station_id")
-        .outputMode("append")
-        .start(GOLD_BIKE_HOURLY)
-    )
+    bike_hourly.writeStream.format("delta").option(
+        "checkpointLocation", CKPT_GOLD_BIKE_H
+    ).partitionBy("dt", "station_id").outputMode("append").start(GOLD_BIKE_HOURLY)
 
     # Daily per station & city
     bike_daily = (
@@ -285,13 +316,9 @@ def main():
         )
     )
 
-    q_gold_bike_d = (
-        bike_daily.writeStream.format("delta")
-        .option("checkpointLocation", CKPT_GOLD_BIKE_D)
-        .partitionBy("dt", "station_id")
-        .outputMode("append")
-        .start(GOLD_BIKE_DAILY)
-    )
+    bike_daily.writeStream.format("delta").option(
+        "checkpointLocation", CKPT_GOLD_BIKE_D
+    ).partitionBy("dt", "station_id").outputMode("append").start(GOLD_BIKE_DAILY)
 
     # ---------- 4) GOLD: WEATHER aggregations ----------
 
@@ -323,13 +350,9 @@ def main():
         )
     )
 
-    q_gold_wx_h = (
-        weather_hourly.writeStream.format("delta")
-        .option("checkpointLocation", CKPT_GOLD_WX_H)
-        .partitionBy("dt", "station_id")
-        .outputMode("append")
-        .start(GOLD_WEATHER_HR)
-    )
+    weather_hourly.writeStream.format("delta").option(
+        "checkpointLocation", CKPT_GOLD_WX_H
+    ).partitionBy("dt", "station_id").outputMode("append").start(GOLD_WEATHER_HR)
 
     # Daily per station & city
     weather_daily = (
@@ -359,18 +382,12 @@ def main():
         )
     )
 
-    q_gold_wx_d = (
-        weather_daily.writeStream.format("delta")
-        .option("checkpointLocation", CKPT_GOLD_WX_D)
-        .partitionBy("dt", "station_id")
-        .outputMode("append")
-        .start(GOLD_WEATHER_DY)
-    )
-    # Run forever
+    weather_daily.writeStream.format("delta").option(
+        "checkpointLocation", CKPT_GOLD_WX_D
+    ).partitionBy("dt", "station_id").outputMode("append").start(GOLD_WEATHER_DY)
 
     # ---------- 5) GOLD: BIKE minute-level snapshot (dev-friendly, near real-time) ----------
-    # Tumbling window = 1 minute, watermark = 2 minutes.
-    # We use AVG over the minute (rounded) + MAX(docks_total) as it is fixed per station.
+    # Tumbling window = 1 minute; use AVG within minute and a fixed docks_total per station.
 
     bike_minute = (
         df_bike_silver.groupBy(
@@ -395,13 +412,10 @@ def main():
         )
     )
 
-    q_gold_bike_m = (
-        bike_minute.writeStream.format("delta")
-        .option("checkpointLocation", CKPT_GOLD_BIKE_M)
-        .outputMode("append")
-        .trigger(processingTime="30 seconds")
-        .partitionBy("dt")
-        .start(GOLD_BIKE_MINUTE)
+    bike_minute.writeStream.format("delta").option(
+        "checkpointLocation", CKPT_GOLD_BIKE_M
+    ).outputMode("append").trigger(processingTime="30 seconds").partitionBy("dt").start(
+        GOLD_BIKE_MINUTE
     )
 
     spark.streams.awaitAnyTermination()

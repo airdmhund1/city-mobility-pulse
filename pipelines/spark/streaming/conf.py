@@ -26,9 +26,7 @@ DELTA_OPTS = {
     "spark.delta.logStore.class": "io.delta.storage.S3SingleDriverLogStore",
     # S3A + MinIO
     "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
-    "spark.hadoop.fs.s3a.endpoint": S3_ENDPOINT.replace("http://", "").replace(
-        "https://", ""
-    ),
+    "spark.hadoop.fs.s3a.endpoint": S3_ENDPOINT.replace("http://", "").replace("https://", ""),
     "spark.hadoop.fs.s3a.path.style.access": "true",
     "spark.hadoop.fs.s3a.connection.ssl.enabled": (
         "false" if S3_ENDPOINT.startswith("http://") else "true"

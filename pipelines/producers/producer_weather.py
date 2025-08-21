@@ -1,24 +1,37 @@
 # producer_weather.py
-import os
+"""
+Synthetic weather producer for the Redpanda/Kafka "weather" topic.
+
+It picks a random station (kept in sync with the bike producer), jitters a few
+weather fields around city-specific baselines, and pushes one JSON message per
+tick. Environment variables let you point it at a different broker/topic and
+control how fast it emits.
+"""
+
 import json
-import time
+import os
 import random
 import signal
+import time
 from datetime import datetime, timezone
+
 from confluent_kafka import Producer
 
-# -------- config (env) --------
+# --- config (env) ---
+# Broker, topic and cadence come from the environment so this can run the same
+# way locally and in a container.
 BROKER = os.getenv("REDPANDA_BROKERS", "redpanda:9092")
 TOPIC = os.getenv("KAFKA_TOPIC_WEATHER", "weather")
 INTERVAL_SEC = float(os.getenv("WEATHER_INTERVAL_SEC", "1.0"))
 
 
 def now_iso_z() -> str:
+    """Current UTC time in ISO-8601 with a 'Z' suffix (e.g., 2025-08-20T12:34:56Z)."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# -------- station set (MATCHES BIKE) --------
-# If your bike mapping differs, just edit this list to the same mapping.
+# --- station set (MATCHES BIKE) ---
+# If the bike mapping changes, mirror it here so joins are straightforward.
 STATIONS = [
     ("S001", "Boston"),
     ("S002", "Cambridge"),
@@ -52,7 +65,7 @@ STATIONS = [
     ("S030", "Salem"),
 ]
 
-# -------- per-station weather baselines (temp_c, wind_kph, humidity%, pressure_mb) --------
+# City-specific baselines: temp_c, wind_kph, humidity%, pressure_mb.
 BASELINES = {
     "S001": (18.0, 14.0, 70, 1015),  # Boston
     "S002": (17.5, 12.0, 68, 1015),
@@ -88,8 +101,12 @@ BASELINES = {
 
 
 def classify_condition(
-    temp_c: float, precip_mm: float, wind_kph: float, humidity: int
+    temp_c: float,
+    precip_mm: float,
+    wind_kph: float,
+    humidity: int,
 ) -> str:
+    """A tiny rule-based label that reads nicely on a dashboard."""
     if precip_mm >= 2.0:
         return "Rain"
     if precip_mm > 0.0:
@@ -101,15 +118,17 @@ def classify_condition(
     return "Clear"
 
 
-_running = True
+_running = True  # flipped to False when we get SIGINT/SIGTERM
 
 
-def _handle_stop(*_):
+def _handle_stop(*_) -> None:
+    """Signal handler to stop the loop cleanly."""
     global _running
     _running = False
 
 
-def _delivery(err, msg):
+def _delivery(err, msg) -> None:
+    """Print a short delivery report; handy when testing locally."""
     if err:
         print(f"delivery failed: {err}")
     else:
@@ -117,7 +136,8 @@ def _delivery(err, msg):
         print(f"delivered {msg.topic()}[{msg.partition()}]@{msg.offset()}")
 
 
-def main():
+def main() -> None:
+    """Wire up the Kafka producer and emit one record per interval."""
     signal.signal(signal.SIGINT, _handle_stop)
     signal.signal(signal.SIGTERM, _handle_stop)
 
@@ -136,11 +156,11 @@ def main():
         station_id, city = rng.choice(STATIONS)
         base_t, base_w, base_h, base_p = BASELINES[station_id]
 
-        # add small, realistic jitter
+        # small, realistic jitter around each baseline
         temp_c = round(base_t + rng.uniform(-4.0, 4.0), 1)
         precip_mm = round(max(0.0, rng.gauss(0.2, 0.6)), 1)
         if rng.random() < 0.65:
-            precip_mm = 0.0  # many ticks are dry
+            precip_mm = 0.0  # most ticks are dry
 
         wind_kph = round(max(0.0, base_w + rng.uniform(-6, 10)), 1)
         humidity = int(min(100, max(25, base_h + rng.randint(-10, 12))))

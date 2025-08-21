@@ -52,11 +52,11 @@ def _read_delta(
     """
     try:
         from deltalake import DeltaTable  # type: ignore
-    except Exception:
+    except Exception as err:
         raise HTTPException(
             status_code=503,
             detail="deltalake is not installed in the API image.",
-        )
+        ) from err
 
     uri = f"s3://lakehouse/{rel_path}"
 
@@ -64,8 +64,8 @@ def _read_delta(
     try:
         dt = DeltaTable(uri, storage_options=_s3_opts())
         df: pd.DataFrame = dt.to_pandas()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Failed reading {uri}: {e}")
+    except Exception as err:
+        raise HTTPException(status_code=503, detail=f"Failed reading {uri}: {err}") from err
 
     if df.empty:
         return []
