@@ -1,0 +1,7 @@
+.DS_Store
+app/.DS_Store
+infra/compose/.env
+logs/
+pipelines/.DS_Store
+pipelines/spark/.DS_Store
+pipelines/spark/streaming/__pycache__/
