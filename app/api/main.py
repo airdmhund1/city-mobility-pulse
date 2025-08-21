@@ -1,6 +1,15 @@
-# app/api/main.py
+"""
+City Mobility Pulse API.
+
+Lightweight read-only endpoints that fetch rows from Delta tables in MinIO and
+return compact JSON responses for the UI. No business logic here—just I/O and
+small, safe transforms.
+"""
+
+from __future__ import annotations
+
 import os
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
@@ -8,13 +17,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 
 # ---------------------- MinIO / Delta helpers ----------------------
-
 def _s3_opts() -> Dict[str, str]:
-    endpoint   = os.getenv("S3_ENDPOINT", "http://minio:9000")
+    """Build storage options for deltalake using env vars exposed to the API."""
+    endpoint = os.getenv("S3_ENDPOINT", "http://minio:9000")
     access_key = os.getenv("AWS_ACCESS_KEY_ID")
     secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
     if not (access_key and secret_key):
-        raise HTTPException(status_code=503, detail="Missing AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in API env.")
+        raise HTTPException(
+            status_code=503,
+            detail="Missing AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in API env.",
+        )
     return {
         "AWS_ACCESS_KEY_ID": access_key,
         "AWS_SECRET_ACCESS_KEY": secret_key,
@@ -35,17 +47,20 @@ def _read_delta(
     eq_filters: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Read a Delta table at s3://lakehouse/<rel_path> with deltalake 0.9.x,
-    apply very simple equality filters and return JSON rows.
+    Read a Delta table at s3://lakehouse/<rel_path> via deltalake 0.9.x,
+    apply simple equality filters (in pandas), and return JSON rows.
     """
     try:
-        from deltalake import DeltaTable
+        from deltalake import DeltaTable  # type: ignore
     except Exception:
-        raise HTTPException(status_code=503, detail="deltalake is not installed in the API image.")
+        raise HTTPException(
+            status_code=503,
+            detail="deltalake is not installed in the API image.",
+        )
 
     uri = f"s3://lakehouse/{rel_path}"
 
-    # Open & load to pandas (0.9.x doesn't support filters= in to_pandas)
+    # Load to pandas (deltalake 0.9.x lacks native filters in to_pandas()).
     try:
         dt = DeltaTable(uri, storage_options=_s3_opts())
         df: pd.DataFrame = dt.to_pandas()
@@ -55,7 +70,7 @@ def _read_delta(
     if df.empty:
         return []
 
-    # pandas-side equality filters
+    # Equality filters (pandas-side, safe and simple).
     if eq_filters:
         for k, v in eq_filters.items():
             if v is None:
@@ -66,40 +81,40 @@ def _read_delta(
     if df.empty:
         return []
 
-    # Keep only requested columns that actually exist
+    # Keep only requested columns that actually exist.
     if select_cols:
         keep = [c for c in select_cols if c in df.columns]
         if keep:
             df = df[keep]
 
-    # Order (if the column exists)
+    # Optional ordering.
     if order_by and order_by in df.columns:
         df = df.sort_values(order_by, ascending=not descending)
 
-    # Limit
+    # Optional limiting.
     if limit and limit > 0:
         df = df.head(limit)
 
-    # Convert timestamps & numpy types to JSON-friendly
+    # Make timestamps/nullable types JSON-friendly.
     for c in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[c]):
             df[c] = df[c].astype("datetime64[ns]").astype(str)
         else:
-            # Convert nullable/NumPy dtypes safely
             df[c] = df[c].where(pd.notnull(df[c]), None)
 
     return df.to_dict(orient="records")
 
 
 # ---------------------- FastAPI app ----------------------
-
 app = FastAPI(title="City Mobility Pulse API")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173", "http://127.0.0.1:5173",
-        "http://localhost:5174", "http://127.0.0.1:5174",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -108,23 +123,27 @@ app.add_middleware(
 
 
 @app.get("/health")
-def health():
+def health() -> Dict[str, str]:
+    """Simple liveness probe."""
     return {"status": "ok"}
 
 
 # ---------------------- SILVER endpoints ----------------------
-
 @app.get("/silver/bike")
 def silver_bike(
     station_id: Optional[str] = None,
     limit: int = Query(100, ge=1, le=5000),
-):
-    # Columns your silver/bike_events stream writes (subset-safe)
+) -> List[Dict[str, Any]]:
+    """Return recent parsed bike events from the Silver layer."""
     cols = [
-        "event_time", "dt",
-        "station_id", "bike_city",
-        "docks_total", "docks_available",
-        "bikes_available", "bikes_occupied",
+        "event_time",
+        "dt",
+        "station_id",
+        "bike_city",
+        "docks_total",
+        "docks_available",
+        "bikes_available",
+        "bikes_occupied",
     ]
     return _read_delta(
         "silver/bike_events",
@@ -140,12 +159,19 @@ def silver_bike(
 def silver_weather(
     station_id: Optional[str] = None,
     limit: int = Query(100, ge=1, le=5000),
-):
+) -> List[Dict[str, Any]]:
+    """Return recent parsed weather events from the Silver layer."""
     cols = [
-        "event_time", "dt",
-        "station_id", "weather_city",
-        "temp_c", "precip_mm", "humidity",
-        "wind_kph", "pressure_mb", "condition",
+        "event_time",
+        "dt",
+        "station_id",
+        "weather_city",
+        "temp_c",
+        "precip_mm",
+        "humidity",
+        "wind_kph",
+        "pressure_mb",
+        "condition",
     ]
     return _read_delta(
         "silver/weather_events",
@@ -158,14 +184,21 @@ def silver_weather(
 
 
 # ---------------------- GOLD endpoints ----------------------
-
 @app.get("/gold/bike_minute")
 def gold_bike_minute(
     station_id: Optional[str] = None,
     limit: int = Query(200, ge=1, le=10000),
-):
-    # Adjust columns to match your minute table (safe if some are missing)
-    cols = ["minute", "station_id", "bike_city", "bikes_available", "bikes_occupied", "docks_total", "dt"]
+) -> List[Dict[str, Any]]:
+    """Return per-minute bike metrics from the Gold layer."""
+    cols = [
+        "minute",
+        "station_id",
+        "bike_city",
+        "bikes_available",
+        "bikes_occupied",
+        "docks_total",
+        "dt",
+    ]
     return _read_delta(
         "gold/bike_minute",
         select_cols=cols,
@@ -180,10 +213,14 @@ def gold_bike_minute(
 def gold_bike_hourly(
     station_id: Optional[str] = None,
     limit: int = Query(200, ge=1, le=10000),
-):
+) -> List[Dict[str, Any]]:
+    """Return per-hour bike metrics from the Gold layer."""
     cols = [
-        "window_start", "window_end", "dt",
-        "station_id", "bike_city",
+        "window_start",
+        "window_end",
+        "dt",
+        "station_id",
+        "bike_city",
         "bikes_occupied_hour",
         "bikes_available_avg_hour",
         "availability_rate_avg_hour",
@@ -204,12 +241,19 @@ def gold_bike_hourly(
 def gold_weather_hourly(
     station_id: Optional[str] = None,
     limit: int = Query(200, ge=1, le=10000),
-):
+) -> List[Dict[str, Any]]:
+    """Return per-hour weather metrics from the Gold layer."""
     cols = [
-        "window_start", "window_end", "dt",
-        "station_id", "weather_city",
-        "avg_temp_c_hour", "sum_precip_mm_hour",
-        "avg_humidity_hour", "avg_wind_kph_hour", "avg_pressure_mb_hour",
+        "window_start",
+        "window_end",
+        "dt",
+        "station_id",
+        "weather_city",
+        "avg_temp_c_hour",
+        "sum_precip_mm_hour",
+        "avg_humidity_hour",
+        "avg_wind_kph_hour",
+        "avg_pressure_mb_hour",
     ]
     return _read_delta(
         "gold/weather_hourly",
