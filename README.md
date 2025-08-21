@@ -1,7 +1,9 @@
 # 🚲🌦 City Mobility Pulse – Real-Time Streaming ETL with Spark, Delta Lake & Kafka
 
 ## 📖 Overview
-**City Mobility Pulse** is a real-time data pipeline that simulates and processes **bike-sharing** and **weather events**.  
+**City Mobility Pulse** is a personal project that demonstrates a modern **data streaming and lakehouse architecture** using open-source tools. It simulates **real-world streaming pipelines** by generating fake data for **bike rentals** and **weather conditions**, then ingesting, processing, and storing that data into a Delta Lake for further analysis. 
+
+To make the simulation realistic, the project uses a set of **cities in the Boston area (Massachusetts, USA)** as the base for the streaming data. Weather baselines and bike stations are mapped to these cities so the data mimics real-world conditions — noisy, varied, and changing over time.
 
 The pipeline ingests data from Kafka (via Redpanda), applies streaming transformations in **Apache Spark**, and stores results in a **Delta Lake** using the **Bronze → Silver → Gold architecture**.
 
