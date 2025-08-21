@@ -28,7 +28,9 @@ flowchart LR
         E --> F[Gold Delta Tables]
     end
 
-    F --> G[(S3 / MinIO / Local FS)]
+    subgraph Storage
+        F --> G[(S3 / MinIO / Local FS)]
+    end
 ```
 
 - **Producers** generate fake bike & weather events and push to Kafka/Redpanda.  
@@ -227,22 +229,10 @@ Defined in your `.env` (you can copy from `.env.example`):
 - **MLflow (optional)**
   - `MLFLOW_TRACKING_URI=http://mlflow:5050`
 
-> Thanks to the compose **anchor** (`x-common: &with-env`), these vars are injected into **every** service automatically.
+> Thanks to the compose **anchor** (`x-common: &with-env`), these vars are injected into **every** service automatically. <
 
 ---
 
-### Typical workflow recap 
-
-1. **Bring up the stack**
-   ```bash
-   make up
-   ```
-
-2. **Start producers (if you run them as one-offs; otherwise compose can manage them)**
-```bash
-docker compose -f infra/compose/docker-compose.yml run --rm producer-bike
-docker compose -f infra/compose/docker-compose.yml run --rm producer-weather
-```
 
 ---
 
