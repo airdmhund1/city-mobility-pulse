@@ -81,27 +81,167 @@ By following this design, the pipeline ensures:
 ---
 
 ## 📂 Project Layout
+## Project Layout
 
-```
-repo-root/
+Below is the repository structure (folders you’ll see after cloning).  
+I’ve added short, human-readable notes next to each folder/file so anyone can skim
+and understand what lives where.
+
+
+```bash
+city-mobility-pulse/
+├── .env.example
+├── README.md
+├── Makefile
+├── logs/
+│   └── YYYY-MM-DD/
+│       └── spark-stream.YYYY-MM-DD_HH-MM-SS.log
+│
+├── infra/
+│   └── compose/
+│       ├── docker-compose.yml
+│       └── (optional) .env
 │
 ├── app/
-│   ├── api/                  # FastAPI-based service (if running API)
-│   └── streaming/
-│       └── stream_to_delta.py   # Main Spark job
+│   ├── api/
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── main.py
+│   │
+│   ├── web/
+│   │   ├── Dockerfile
+│   │   ├── index.html
+│   │   ├── src/
+│   │   │   ├── main.jsx
+│   │   │   └── App.jsx
+│   │   ├── package.json
+│   │   └── vite.config.js
+│   │
+│   └── common/
+│       └── settings.py
 │
-├── producers/                # Data producers (bike & weather)
-│   ├── producer_bike.py
-│   └── producer_weather.py
+├── pipelines/
+│   ├── producers/
+│   │   ├── Dockerfile
+│   │   ├── producer_bike.py
+│   │   └── producer_weather.py
+│   │
+│   └── spark/
+│       ├── Dockerfile
+│       ├── streaming/
+│       │   ├── conf.py
+│       │   └── stream_to_delta.py
+│       └── (jars/)
 │
-├── common/                   # Shared modules/config
-│   └── conf.py
-│
-├── requirements.txt          # Python deps
-├── pyproject.toml            # Linting/formatting config
-├── Dockerfile                # Container build
-├── docker-compose.yml        # Local services (Kafka/Redpanda, Spark)
-└── Makefile                  # Helper commands
+└── .gitignore
+
+### What each top-level piece does
+
+- **Makefile**
+  - `make up` / `make down` / `make restart` — bring the stack up/down quickly.
+  - `make spark-stream` — submits the Spark job and writes logs under `./logs/<date>/`.
+  - `make ui-start` (if you keep the web dev flow locally) or rely on the Dockerized web service.
+  - Feel free to add your own shortcuts; the repo already uses the “dated log file” pattern.
+
+- **infra/compose/docker-compose.yml**
+  - Starts **Redpanda (Kafka)**, **MinIO (S3)**, **Spark**, **FastAPI**, and the **Web UI**.
+  - Uses an **`x-common: &with-env`** anchor so **every** service sees the same `.env` values.
+  - The `create-bucket` helper waits for MinIO and ensures the `S3_BUCKET` exists.
+  - Ports you’ll care about:
+    - Redpanda outside: `9094`
+    - MinIO API/Console: `9000 / 9001`
+    - FastAPI: `${API_PORT}` (default `8080`)
+    - Web (Vite): `${WEB_PORT}` (default `5173`)
+
+- **app/api**
+  - **main.py** exposes endpoints:
+    - `/silver/bike`, `/silver/weather`: reads parsed/cleaned **Silver** tables.
+    - `/gold/bike_minute`, `/gold/bike_hourly`, `/gold/weather_hourly`: reads **Gold** aggregates.
+  - Uses the `deltalake` Python lib to open Delta tables **stored in MinIO** via S3 options from env.
+  - CORS is enabled for dev ports (5173/5174).
+
+- **app/web**
+  - Minimal front-end to “see something now.” Calls FastAPI and renders JSON results.
+  - Useful as a sanity check while data accrues in Silver/Gold.
+  - Runs via Docker (or `npm run dev` if you prefer local).
+
+- **pipelines/producers**
+  - Two Python scripts publishing JSON events into Kafka:
+    - **producer_bike.py**: contains a fixed station map (S001–S030) and realistic station metrics.
+    - **producer_weather.py**: emits weather for the **same** stations, so you can join later.
+  - Both use **confluent-kafka**; they respect interval and broker/topic env vars.
+
+- **pipelines/spark/streaming**
+  - **stream_to_delta.py** implements the **Medallion (Bronze/Silver/Gold)** flow:
+    - **Bronze** → raw JSON + Kafka metadata (partition/offset/timestamp).
+    - **Silver** → parsed schemas, typed timestamps, derived metrics, watermarks.
+    - **Gold** → per-station minute/hour/day aggregates for bike & weather.
+  - **conf.py** holds Spark/Delta/S3A config (endpoint, credentials, path-style, etc.).
+  - Output layout in MinIO:
+    - `s3a://<bucket>/bronze/*`
+    - `s3a://<bucket>/silver/bike_events`, `.../silver/weather_events`
+    - `s3a://<bucket>/gold/bike_minute`, `.../gold/bike_usage_hourly`, `.../gold/weather_hourly`, etc.
+
+- **app/common/settings.py** (optional helper)
+  - A small Pydantic-Settings based module to centralize env reading, if you want to reduce
+    repeated `os.getenv` calls. Not required for the current working code, but handy if you refactor.
+
+- **logs/**
+  - Spark logs land here automatically when you run `make spark-stream`.  
+    Each invocation creates a **date directory** and a **timestamped log file**.
+
+---
+
+### Where to put new files
+
+- **New Python services** → under `app/<service-name>/` with its own `Dockerfile/requirements.txt`.
+- **More producers** → `pipelines/producers/` (reuse the same Dockerfile).
+- **Extra Spark jobs** → `pipelines/spark/<new-job>/` or beside `streaming/` if it’s part of the same app.
+
+---
+
+### Environment variables (quick reference)
+
+Defined in your `.env` (you can copy from `.env.example`):
+
+- **MinIO / S3**
+  - `S3_ENDPOINT=http://minio:9000`
+  - `S3_BUCKET=lakehouse`
+  - `AWS_ACCESS_KEY_ID=...`
+  - `AWS_SECRET_ACCESS_KEY=...`
+
+- **Kafka / Redpanda**
+  - `REDPANDA_BROKERS=redpanda:9092`
+  - `KAFKA_TOPIC_BIKE=bike`
+  - `KAFKA_TOPIC_WEATHER=weather`
+
+- **API / Web**
+  - `API_PORT=8080`
+  - `WEB_PORT=5173`
+
+- **Postgres (optional for later)**
+  - `POSTGRES_USER=postgres`
+  - `POSTGRES_PASSWORD=postgres`
+  - `POSTGRES_DB=mobility`
+
+- **MLflow (optional)**
+  - `MLFLOW_TRACKING_URI=http://mlflow:5050`
+
+> Thanks to the compose **anchor** (`x-common: &with-env`), these vars are injected into **every** service automatically.
+
+---
+
+### Typical workflow recap 
+
+1. **Bring up the stack**
+   ```bash
+   make up
+   ```
+
+2. **Start producers (if you run them as one-offs; otherwise compose can manage them)**
+```bash
+docker compose -f infra/compose/docker-compose.yml run --rm producer-bike
+docker compose -f infra/compose/docker-compose.yml run --rm producer-weather
 ```
 
 ---
