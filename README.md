@@ -39,7 +39,7 @@ flowchart LR
 
 ## Bronze, Silver, and Gold Tables (Medallion Architecture)
 
-This project follows the **Medallion Architecture** pattern in Delta Lake, which organizes data into three layers — **Bronze**, **Silver**, and **Gold** — to mimic real-world data engineering practices.
+This project follows the **Medallion Architecture** pattern in Delta Lake, which organizes data into three layers  **Bronze**, **Silver**, and **Gold**  to mimic real-world data engineering practices.
 
 ### 🥉 Bronze Layer (Raw Data)
 - **Purpose**: Stores raw, unprocessed data exactly as it arrives from the source (in this case, Kafka topics for bikes and weather).
@@ -142,8 +142,8 @@ city-mobility-pulse/
 ### What each top-level piece does
 
 - **Makefile**
-  - `make up` / `make down` / `make restart` — bring the stack up/down quickly.
-  - `make spark-stream` — submits the Spark job and writes logs under `./logs/<date>/`.
+  - `make up` / `make down` / `make restart` ; bring the stack up/down quickly.
+  - `make spark-stream` ; submits the Spark job and writes logs under `./logs/<date>/`.
   - `make ui-start` (if you keep the web dev flow locally) or rely on the Dockerized web service.
   - Feel free to add your own shortcuts; the repo already uses the “dated log file” pattern.
 
