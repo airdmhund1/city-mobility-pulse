@@ -1,5 +1,9 @@
+x-common: &with-env
+  env_file: .env
+
 services:
   redpanda:
+    <<: *with-env
     image: redpandadata/redpanda:v24.1.6
     command:
       - redpanda start
@@ -16,6 +20,7 @@ services:
       retries: 20
 
   minio:
+    <<: *with-env
     image: quay.io/minio/minio:RELEASE.2024-07-26T20-48-21Z
     command: server /data --console-address ":9001"
     environment:
@@ -25,10 +30,10 @@ services:
     volumes: ["minio-data:/data"]
 
   create-bucket:
+    <<: *with-env
     image: quay.io/minio/mc:latest
     depends_on:
       - minio
-    # IMPORTANT: clear mc's default ENTRYPOINT so we can run /bin/sh
     entrypoint: [""]
     command:
       - /bin/sh
@@ -43,9 +48,9 @@ services:
         /usr/bin/mc ls "local/${S3_BUCKET}" >/dev/null 2>&1 || /usr/bin/mc mb -p "local/${S3_BUCKET}"
         /usr/bin/mc ilm rule add --expire-days 30 "local/${S3_BUCKET}" || true
         echo "Bucket ready."
-      
 
   postgres:
+    <<: *with-env
     image: postgres:16
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -60,6 +65,7 @@ services:
       retries: 20
 
   mlflow:
+    <<: *with-env
     image: ghcr.io/mlflow/mlflow:latest
     command: mlflow server --host 0.0.0.0 --port 5050 --backend-store-uri sqlite:///mlflow.db --default-artifact-root ${S3_ENDPOINT}/${S3_BUCKET}/mlflow
     environment:
@@ -70,6 +76,7 @@ services:
     volumes: ["mlflow-data:/mlruns"]
 
   spark:
+    <<: *with-env
     build:
       context: ../../pipelines/spark
       dockerfile: Dockerfile
@@ -83,10 +90,10 @@ services:
     depends_on: [redpanda, minio, create-bucket]
 
   fastapi:
+    <<: *with-env
     build:
       context: ../../app/api
       dockerfile: Dockerfile
-    env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/mobility
       S3_ENDPOINT: ${S3_ENDPOINT}
@@ -95,6 +102,7 @@ services:
     depends_on: [postgres]
 
   web:
+    <<: *with-env
     build:
       context: ../../app/web
       dockerfile: Dockerfile
@@ -104,6 +112,7 @@ services:
     depends_on: [fastapi]
 
   producer-bike:
+    <<: *with-env
     build:
       context: ../../pipelines/producers
       dockerfile: Dockerfile
@@ -113,6 +122,7 @@ services:
     depends_on: [redpanda]
 
   producer-weather:
+    <<: *with-env
     build:
       context: ../../pipelines/producers
       dockerfile: Dockerfile
@@ -123,6 +133,7 @@ services:
     depends_on: [redpanda]
 
   ui:
+    <<: *with-env
     image: node:18-alpine
     working_dir: /app
     volumes:
