@@ -67,3 +67,20 @@ ui-down:
 	cd infra/compose && docker compose --env-file .env stop ui
 
 ui-restart: ui-down ui-up
+
+# Format Python code with black + isort
+fmt:
+	@echo "Formatting code with black and isort..."
+	black .
+	isort .
+
+# Lint Python code with flake8 + mypy + pylint
+lint:
+	@echo "Running linters..."
+	flake8 .
+	mypy .
+	pylint $(shell find . -name "*.py")
+
+# Run all quality checks (formatting + linting)
+check: fmt lint
+	@echo "All checks passed ✅"

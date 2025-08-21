@@ -251,8 +251,8 @@ Install these locally:
 
 ### 2. Clone Repo
 ```bash
-git clone https://github.com/<your-org>/<your-repo>.git
-cd <your-repo>
+git clone https://github.com/airdmhund1/city-mobility-pulse.git
+cd city-mobility-pulse
 ```
 
 ---
@@ -272,7 +272,7 @@ By default:
 
 ---
 
-### 4. Run Services (Kafka + Spark + Producers)
+### 4. Run Services (Kafka + Spark + Producers) *from root of project8
 Start everything using Docker Compose:
 
 ```bash
@@ -287,10 +287,10 @@ This will:
 ---
 
 ### 5. Run Spark Streaming Job
-Inside container:
+From root of Repo (or from):
 
 ```bash
-make spark
+make spark-stream
 ```
 
 This runs:
@@ -333,6 +333,10 @@ This runs:
 - **Flake8** (PEP8 compliance)  
 - **Pylint** (static analysis)  
 - **Isort** (import ordering)  
+** should have installed the following
+```bash
+pip install black isort flake8 mypy pylint
+```
 
 ---
 
