@@ -8,7 +8,7 @@ To make the simulation realistic, the project uses a set of **cities in the Bost
 The pipeline ingests data from Kafka (via Redpanda), applies streaming transformations in **Apache Spark**, and stores results in a **Delta Lake** using the **Bronze → Silver → Gold architecture**.
 
 This project is useful for:
-- Learning **modern streaming ETL pipelines**
+- Learning/Demonstrating **modern streaming ETL pipelines**
 - Understanding how **weather impacts bike-sharing usage**
 - Building a foundation for **real-time analytics dashboards**
 
@@ -113,17 +113,14 @@ city-mobility-pulse/
 │   │   └── main.py
 │   │
 │   ├── web/
-│   │   ├── Dockerfile
-│   │   ├── index.html
-│   │   ├── src/
-│   │   │   ├── main.jsx
-│   │   │   └── App.jsx
-│   │   ├── package.json
-│   │   └── vite.config.js
-│   │
-│   └── common/
-│       └── settings.py
-│
+│       ├── Dockerfile
+│       ├── index.html
+│       ├── src/
+│       │   ├── main.jsx
+│       │   └── App.jsx
+│       ├── package.json
+│       └── vite.config.js
+│   
 ├── pipelines/
 │   ├── producers/
 │   │   ├── Dockerfile
@@ -188,10 +185,6 @@ city-mobility-pulse/
     - `s3a://<bucket>/silver/bike_events`, `.../silver/weather_events`
     - `s3a://<bucket>/gold/bike_minute`, `.../gold/bike_usage_hourly`, `.../gold/weather_hourly`, etc.
 
-- **app/common/settings.py** (optional helper)
-  - A small Pydantic-Settings based module to centralize env reading, if you want to reduce
-    repeated `os.getenv` calls. Not required for the current working code, but handy if you refactor.
-
 - **logs/**
   - Spark logs land here automatically when you run `make spark-stream`.  
     Each invocation creates a **date directory** and a **timestamped log file**.
@@ -233,9 +226,7 @@ Defined in your `.env` (you can copy from `.env.example`):
 - **MLflow (optional)**
   - `MLFLOW_TRACKING_URI=http://mlflow:5050`
 
-> Thanks to the compose **anchor** (`x-common: &with-env`), these vars are injected into **every** service automatically. <
-
----
+> Thanks to the compose **anchor** (`x-common: &with-env`), these vars are injected into **every** service automatically. 
 
 
 ---
