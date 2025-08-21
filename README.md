@@ -137,6 +137,8 @@ city-mobility-pulse/
 │
 └── .gitignore
 
+```
+
 ### What each top-level piece does
 
 - **Makefile**
